@@ -1,6 +1,6 @@
 import 'dart:math';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' show Axis;
 import '../models/pose_template.dart';
 
 class PoseAnalysisService {

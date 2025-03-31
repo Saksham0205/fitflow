@@ -136,23 +136,23 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
         InputImageRotationValue.fromRawValue(camera.sensorOrientation);
     if (rotation == null) return null;
 
-    // Since we're using ML Kit, we need to convert the camera image to the format it expects
-    // This is a simplified version - in a production app, you'd need to handle different image formats
-    final format = InputImageFormatValue.fromRawValue(image.format.raw);
-    if (format == null) return null;
+    final format = InputImageFormat.bgra8888;
 
-    // For simplicity, we're assuming the first plane contains the image data
-    // In a production app, you'd need to handle different image formats properly
-    final plane = image.planes.first;
+    final planes = image.planes;
+    final bytes = planes[0].bytes;
+    final height = image.height;
+    final width = image.width;
+
+    final inputImageData = InputImageMetadata(
+      size: Size(width.toDouble(), height.toDouble()),
+      rotation: rotation,
+      format: format,
+      bytesPerRow: planes[0].bytesPerRow,
+    );
 
     return InputImage.fromBytes(
-      bytes: plane.bytes,
-      metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: rotation,
-        format: format,
-        bytesPerRow: plane.bytesPerRow,
-      ),
+      bytes: bytes,
+      metadata: inputImageData,
     );
   }
 
