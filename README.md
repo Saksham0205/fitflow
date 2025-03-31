@@ -1,16 +1,35 @@
-# fitflow
+# FitFlow Assets
 
-A new Flutter project.
+This directory contains all the assets used in the FitFlow application.
 
-## Getting Started
+## Directory Structure
 
-This project is a starting point for a Flutter application.
+- `images/`: Contains all image assets used in the app
+- `icons/`: Contains all icon assets used in the app
+- `animations/`: Contains Lottie animation files used in the app
 
-A few resources to get you started if this is your first Flutter project:
+## Usage Guidelines
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+- All images should be optimized for mobile devices
+- Icons should be in SVG format when possible
+- Animations should be in Lottie JSON format
+- Follow the naming convention: lowercase with underscores (e.g., `workout_icon.svg`)
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Required Assets
+
+### Images
+- Onboarding screens backgrounds
+- Workout illustrations
+- Achievement badges
+- Profile placeholders
+
+### Icons
+- Navigation icons
+- Feature icons
+- Action buttons
+
+### Animations
+- Loading animations
+- Achievement celebrations
+- Workout completion
+- Hydration reminders
