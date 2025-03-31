@@ -1,13 +1,21 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:fitflow/config/theme.dart';
+import '../models/pose_template.dart';
+import '../services/pose_analysis_service.dart';
 
 class PostureDetectionScreen extends StatefulWidget {
-  const PostureDetectionScreen({super.key});
+  final PoseTemplate? exerciseTemplate;
+
+  const PostureDetectionScreen({
+    super.key,
+    this.exerciseTemplate,
+  });
 
   @override
   State<PostureDetectionScreen> createState() => _PostureDetectionScreenState();
@@ -148,11 +156,33 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     );
   }
 
-  void _analyzePosture(Pose pose) {
-    // This is a simplified posture analysis
-    // In a real app, you would implement more sophisticated algorithms
-    // based on the specific exercises and posture requirements
+  // Current exercise template
+  PoseTemplate? _currentTemplate;
 
+  void _analyzePosture(Pose pose) {
+    if (_currentTemplate == null) {
+      // Default to general posture analysis if no specific exercise is selected
+      _analyzeGeneralPosture(pose);
+      return;
+    }
+
+    // Analyze pose against current exercise template
+    final analysis = PoseAnalysisService.analyzePose(pose, _currentTemplate!);
+
+    _isGoodPosture = analysis.isCorrectPose;
+
+    if (_isGoodPosture) {
+      _postureFeedback = 'Good form! Keep it up!';
+    } else {
+      // Join all feedback messages with proper formatting
+      _postureFeedback = analysis.feedbackMessages.join('\n');
+
+      // Provide haptic feedback for incorrect posture
+      HapticFeedback.mediumImpact();
+    }
+  }
+
+  void _analyzeGeneralPosture(Pose pose) {
     // Get key landmarks
     final leftShoulder = pose.landmarks[PoseLandmarkType.leftShoulder];
     final rightShoulder = pose.landmarks[PoseLandmarkType.rightShoulder];
@@ -200,12 +230,16 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     } else {
       if (!isShoulderAligned) {
         _postureFeedback = 'Shoulders not level - try to balance them';
+        HapticFeedback.mediumImpact();
       } else if (!isHipAligned) {
         _postureFeedback = 'Hips not level - try to balance your weight';
+        HapticFeedback.mediumImpact();
       } else if (!isHeadAligned) {
         _postureFeedback = 'Head not aligned - try to keep your head centered';
+        HapticFeedback.mediumImpact();
       } else {
         _postureFeedback = 'Adjust your posture';
+        HapticFeedback.mediumImpact();
       }
     }
   }
