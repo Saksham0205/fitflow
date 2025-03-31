@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -132,32 +133,67 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     if (_cameraController == null) return null;
 
     final camera = _cameraController!.description;
-    final rotation =
-        InputImageRotationValue.fromRawValue(camera.sensorOrientation);
+    final rotation = InputImageRotationValue.fromRawValue(
+      Platform.isAndroid ? camera.sensorOrientation : 0,
+    );
     if (rotation == null) return null;
 
-    // Handle YUV_420_888 format
-    final format = InputImageFormat.yuv420;
+    // Handle image mirroring for front camera
+    final bool isImageFlipped =
+        camera.lensDirection == CameraLensDirection.front;
 
     final planes = image.planes;
-    final height = image.height;
     final width = image.width;
+    final height = image.height;
 
-    // Combine YUV planes into a single buffer
-    final allBytes = WriteBuffer();
-    for (Plane plane in planes) {
-      allBytes.putUint8List(plane.bytes);
+    // Handle YUV_420_888 format
+    final yBuffer = planes[0].bytes;
+    final uBuffer = planes[1].bytes;
+    final vBuffer = planes[2].bytes;
+
+    final int yRowStride = planes[0].bytesPerRow;
+    final int uvRowStride = planes[1].bytesPerRow;
+    final int uvPixelStride = planes[1].bytesPerPixel!;
+
+    final bytes = Uint8List(width * height * 4);
+
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final int yIndex = y * yRowStride + x;
+        final int uvIndex = (y ~/ 2) * uvRowStride + (x ~/ 2) * uvPixelStride;
+
+        final int yValue = yBuffer[yIndex];
+        final int uValue = uBuffer[uvIndex];
+        final int vValue = vBuffer[uvIndex];
+
+        // Convert YUV to RGB
+        int r = (yValue + 1.13983 * (vValue - 128)).round();
+        int g = (yValue - 0.39465 * (uValue - 128) - 0.58060 * (vValue - 128))
+            .round();
+        int b = (yValue + 2.03211 * (uValue - 128)).round();
+
+        // Clamp RGB values
+        r = r.clamp(0, 255);
+        g = g.clamp(0, 255);
+        b = b.clamp(0, 255);
+
+        final int index = (y * width + x) * 4;
+        bytes[index] = r;
+        bytes[index + 1] = g;
+        bytes[index + 2] = b;
+        bytes[index + 3] = 255; // Alpha channel
+      }
     }
 
     final inputImageData = InputImageMetadata(
       size: Size(width.toDouble(), height.toDouble()),
       rotation: rotation,
-      format: format,
-      bytesPerRow: planes[0].bytesPerRow,
+      format: InputImageFormat.bgra8888,
+      bytesPerRow: width * 4,
     );
 
     return InputImage.fromBytes(
-      bytes: allBytes.done().buffer.asUint8List(),
+      bytes: bytes,
       metadata: inputImageData,
     );
   }
