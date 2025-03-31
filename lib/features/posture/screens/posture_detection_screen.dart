@@ -136,12 +136,18 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
         InputImageRotationValue.fromRawValue(camera.sensorOrientation);
     if (rotation == null) return null;
 
-    final format = InputImageFormat.bgra8888;
+    // Handle YUV_420_888 format
+    final format = InputImageFormat.yuv420;
 
     final planes = image.planes;
-    final bytes = planes[0].bytes;
     final height = image.height;
     final width = image.width;
+
+    // Combine YUV planes into a single buffer
+    final allBytes = WriteBuffer();
+    for (Plane plane in planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
 
     final inputImageData = InputImageMetadata(
       size: Size(width.toDouble(), height.toDouble()),
@@ -151,7 +157,7 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     );
 
     return InputImage.fromBytes(
-      bytes: bytes,
+      bytes: allBytes.done().buffer.asUint8List(),
       metadata: inputImageData,
     );
   }
