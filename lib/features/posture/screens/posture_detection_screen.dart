@@ -22,7 +22,7 @@ class PostureDetectionScreen extends StatefulWidget {
   State<PostureDetectionScreen> createState() => _PostureDetectionScreenState();
 }
 
-class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
+class _PostureDetectionScreenState extends State<PostureDetectionScreen> with WidgetsBindingObserver {
   bool _isPermissionGranted = false;
   late final Future<void> _future;
   CameraController? _cameraController;
@@ -37,20 +37,40 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
   String? _postureFeedback;
   bool _isGoodPosture = false;
   int _frameCount = 0;
-  static const int _processEveryNFrames = 5; // Process every 5th frame
+  static const int _processEveryNFrames = 3; // Process every 3rd frame for better performance/accuracy balance
   double _lastDeviation = 0.0;
   ErrorSeverity _currentSeverity = ErrorSeverity.none;
   double _fps = 0.0;
   DateTime _lastProcessedTime = DateTime.now();
 
+  // Current exercise template
+  PoseTemplate? _currentTemplate;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _currentTemplate = widget.exerciseTemplate;
     _future = _requestCameraPermission();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Handle app lifecycle changes to properly manage camera resources
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+      return;
+    }
+
+    if (state == AppLifecycleState.inactive) {
+      _stopCamera();
+    } else if (state == AppLifecycleState.resumed) {
+      _startCamera();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _stopCamera();
     _poseDetector.close();
     super.dispose();
@@ -71,28 +91,43 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
 
     // Use the front camera for posture detection
     final camera = cameras.firstWhere(
-      (camera) => camera.lensDirection == CameraLensDirection.front,
+          (camera) => camera.lensDirection == CameraLensDirection.front,
       orElse: () => cameras.first,
     );
 
     _cameraController = CameraController(
       camera,
-      ResolutionPreset.high,
+      ResolutionPreset.medium, // Medium resolution for better performance
       enableAudio: false,
+      imageFormatGroup: Platform.isAndroid
+          ? ImageFormatGroup.yuv420
+          : ImageFormatGroup.bgra8888,
     );
 
-    await _cameraController!.initialize();
+    try {
+      await _cameraController!.initialize();
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    _cameraController!.startImageStream(_processCameraImage);
+      _cameraController!.startImageStream(_processCameraImage);
 
-    setState(() {});
+      setState(() {});
+    } catch (e) {
+      print('Error starting camera: $e');
+      // Show error to user
+      if (mounted) {
+        setState(() {
+          _postureFeedback = 'Error initializing camera: ${e.toString()}';
+        });
+      }
+    }
   }
 
   Future<void> _stopCamera() async {
     if (_cameraController != null) {
-      await _cameraController!.stopImageStream();
+      if (_cameraController!.value.isStreamingImages) {
+        await _cameraController!.stopImageStream();
+      }
       await _cameraController!.dispose();
       _cameraController = null;
     }
@@ -100,8 +135,9 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
 
   Future<void> _processCameraImage(CameraImage image) async {
     _frameCount++;
-    if (_frameCount % _processEveryNFrames != 0)
+    if (_frameCount % _processEveryNFrames != 0) {
       return; // Skip frames for performance
+    }
 
     if (_isBusy) return;
     _isBusy = true;
@@ -109,50 +145,59 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     // Calculate FPS
     final now = DateTime.now();
     final duration = now.difference(_lastProcessedTime);
-    _fps = 1000 / duration.inMilliseconds * _processEveryNFrames;
+    if (duration.inMilliseconds > 0) {
+      _fps = 1000 / duration.inMilliseconds * _processEveryNFrames;
+    }
     _lastProcessedTime = now;
 
-    final inputImage = _convertCameraImageToInputImage(image);
-    if (inputImage == null) {
-      _isBusy = false;
-      return;
-    }
+    try {
+      final inputImage = _getInputImage(image);
+      if (inputImage == null) {
+        _isBusy = false;
+        return;
+      }
 
-    final poses = await _poseDetector.processImage(inputImage);
+      final poses = await _poseDetector.processImage(inputImage);
 
-    if (poses.isNotEmpty) {
-      final painter = PosePainter(
-        poses.first,
-        Size(image.width.toDouble(), image.height.toDouble()),
-        InputImageRotation.rotation0deg,
-        CameraLensDirection.front,
-      );
+      if (poses.isNotEmpty) {
+        final painter = PosePainter(
+          poses.first,
+          Size(inputImage.metadata!.size.width, inputImage.metadata!.size.height),
+          inputImage.metadata!.rotation,
+          _cameraController!.description.lensDirection,
+        );
 
-      _customPaint = CustomPaint(painter: painter);
+        // Analyze posture and provide feedback
+        _analyzePosture(poses.first);
 
-      // Analyze posture and provide feedback
-      _analyzePosture(poses.first);
-
-      // Update UI with performance metrics
+        if (mounted) {
+          setState(() {
+            _customPaint = CustomPaint(painter: painter);
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _customPaint = null;
+            _postureFeedback = 'No pose detected';
+            _isGoodPosture = false;
+          });
+        }
+      }
+    } catch (e) {
+      print('Error processing image: $e');
       if (mounted) {
         setState(() {
-          _customPaint = CustomPaint(painter: painter);
+          _postureFeedback = 'Error processing image';
+          _isGoodPosture = false;
         });
       }
-    } else {
-      _customPaint = null;
-      _postureFeedback = 'No pose detected';
-      _isGoodPosture = false;
-    }
-
-    if (mounted) {
-      setState(() {});
     }
 
     _isBusy = false;
   }
 
-  InputImage? _convertCameraImageToInputImage(CameraImage image) {
+  InputImage? _getInputImage(CameraImage image) {
     if (_cameraController == null) return null;
 
     final camera = _cameraController!.description;
@@ -161,68 +206,42 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     );
     if (rotation == null) return null;
 
-    // Handle image mirroring for front camera
-    final bool isImageFlipped =
-        camera.lensDirection == CameraLensDirection.front;
+    // Handle different image formats
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
 
-    final planes = image.planes;
-    final width = image.width;
-    final height = image.height;
-
-    // Handle YUV_420_888 format
-    final yBuffer = planes[0].bytes;
-    final uBuffer = planes[1].bytes;
-    final vBuffer = planes[2].bytes;
-
-    final int yRowStride = planes[0].bytesPerRow;
-    final int uvRowStride = planes[1].bytesPerRow;
-    final int uvPixelStride = planes[1].bytesPerPixel!;
-
-    final bytes = Uint8List(width * height * 4);
-
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        final int yIndex = y * yRowStride + x;
-        final int uvIndex = (y ~/ 2) * uvRowStride + (x ~/ 2) * uvPixelStride;
-
-        final int yValue = yBuffer[yIndex];
-        final int uValue = uBuffer[uvIndex];
-        final int vValue = vBuffer[uvIndex];
-
-        // Convert YUV to RGB
-        int r = (yValue + 1.13983 * (vValue - 128)).round();
-        int g = (yValue - 0.39465 * (uValue - 128) - 0.58060 * (vValue - 128))
-            .round();
-        int b = (yValue + 2.03211 * (uValue - 128)).round();
-
-        // Clamp RGB values
-        r = r.clamp(0, 255);
-        g = g.clamp(0, 255);
-        b = b.clamp(0, 255);
-
-        final int index = (y * width + x) * 4;
-        bytes[index] = r;
-        bytes[index + 1] = g;
-        bytes[index + 2] = b;
-        bytes[index + 3] = 255; // Alpha channel
-      }
+    // Use the appropriate method based on platform and format
+    if (Platform.isAndroid) {
+      // For Android, use plane data
+      return InputImage.fromBytes(
+        bytes: _concatenatePlanes(image.planes),
+        metadata: InputImageMetadata(
+          size: Size(image.width.toDouble(), image.height.toDouble()),
+          rotation: rotation,
+          format: format,
+          bytesPerRow: image.planes[0].bytesPerRow,
+        ),
+      );
+    } else if (Platform.isIOS) {
+      // For iOS, handle BGRA format
+      return InputImage.fromBytes(
+        bytes: image.planes[0].bytes,
+        metadata: InputImageMetadata(
+          size: Size(image.width.toDouble(), image.height.toDouble()),
+          rotation: rotation,
+          format: format,
+          bytesPerRow: image.planes[0].bytesPerRow,
+        ),
+      );
     }
 
-    final inputImageData = InputImageMetadata(
-      size: Size(width.toDouble(), height.toDouble()),
-      rotation: rotation,
-      format: InputImageFormat.bgra8888,
-      bytesPerRow: width * 4,
-    );
-
-    return InputImage.fromBytes(
-      bytes: bytes,
-      metadata: inputImageData,
-    );
+    return null;
   }
 
-  // Current exercise template
-  PoseTemplate? _currentTemplate;
+  Uint8List _concatenatePlanes(List<Plane> planes) {
+    // For YUV420 format, just use the Y plane for ML Kit
+    return planes[0].bytes;
+  }
 
   void _analyzePosture(Pose pose) {
     if (_currentTemplate == null) {
@@ -234,22 +253,24 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     // Analyze pose against current exercise template
     final analysis = PoseAnalysisService.analyzePose(pose, _currentTemplate!);
 
-    _isGoodPosture = analysis.isCorrectPose;
-    _lastDeviation = analysis.maxDeviation;
-    _currentSeverity = analysis.severity;
+    setState(() {
+      _isGoodPosture = analysis.isCorrectPose;
+      _lastDeviation = analysis.maxDeviation;
+      _currentSeverity = analysis.severity;
 
-    if (_isGoodPosture) {
-      _postureFeedback = 'Good form! Keep it up!';
-    } else {
-      _postureFeedback = analysis.feedbackMessages.join('\n');
+      if (_isGoodPosture) {
+        _postureFeedback = 'Good form! Keep it up!';
+      } else {
+        _postureFeedback = analysis.feedbackMessages.join('\n');
 
-      // Provide haptic feedback based on error severity
-      if (_currentSeverity == ErrorSeverity.major) {
-        HapticFeedback.heavyImpact();
-      } else if (_currentSeverity == ErrorSeverity.minor) {
-        HapticFeedback.mediumImpact();
+        // Provide haptic feedback based on error severity
+        if (_currentSeverity == ErrorSeverity.major) {
+          HapticFeedback.heavyImpact();
+        } else if (_currentSeverity == ErrorSeverity.minor) {
+          HapticFeedback.mediumImpact();
+        }
       }
-    }
+    });
   }
 
   void _analyzeGeneralPosture(Pose pose) {
@@ -260,58 +281,123 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     final rightHip = pose.landmarks[PoseLandmarkType.rightHip];
     final leftEar = pose.landmarks[PoseLandmarkType.leftEar];
     final rightEar = pose.landmarks[PoseLandmarkType.rightEar];
+    final nose = pose.landmarks[PoseLandmarkType.nose];
 
-    // Check if all required landmarks are detected
-    if (leftShoulder == null ||
-        rightShoulder == null ||
-        leftHip == null ||
-        rightHip == null ||
-        leftEar == null ||
-        rightEar == null) {
-      _postureFeedback = 'Cannot analyze posture - some landmarks not detected';
-      _isGoodPosture = false;
+    // Check if key landmarks are detected
+    final missingLandmarks = <String>[];
+    if (leftShoulder == null) missingLandmarks.add('left shoulder');
+    if (rightShoulder == null) missingLandmarks.add('right shoulder');
+    if (leftHip == null) missingLandmarks.add('left hip');
+    if (rightHip == null) missingLandmarks.add('right hip');
+    if (leftEar == null) missingLandmarks.add('left ear');
+    if (rightEar == null) missingLandmarks.add('right ear');
+
+    if (missingLandmarks.isNotEmpty) {
+      setState(() {
+        _postureFeedback = 'Cannot analyze posture - missing ${missingLandmarks.join(', ')}';
+        _isGoodPosture = false;
+      });
       return;
     }
 
+    // Calculate posture metrics
+    final feedbacks = <String>[];
+    var totalSeverity = 0.0;
+    var checksFailed = 0;
+
     // Check shoulder alignment (horizontal)
-    final shoulderDiff = (leftShoulder.y - rightShoulder.y).abs();
-    final shoulderThreshold = 20.0; // Threshold for acceptable difference
+    final shoulderDiff = (leftShoulder!.y - rightShoulder!.y).abs();
+    final shoulderThreshold = 15.0;
+    if (shoulderDiff > shoulderThreshold) {
+      feedbacks.add('Level your shoulders');
+      totalSeverity += shoulderDiff / shoulderThreshold;
+      checksFailed++;
+    }
 
     // Check hip alignment (horizontal)
-    final hipDiff = (leftHip.y - rightHip.y).abs();
-    final hipThreshold = 20.0;
+    final hipDiff = (leftHip!.y - rightHip!.y).abs();
+    final hipThreshold = 15.0;
+    if (hipDiff > hipThreshold) {
+      feedbacks.add('Balance your hips');
+      totalSeverity += hipDiff / hipThreshold;
+      checksFailed++;
+    }
 
-    // Check head alignment (vertical with shoulders)
-    final leftEarToShoulder = (leftEar.x - leftShoulder.x).abs();
-    final rightEarToShoulder = (rightEar.x - rightShoulder.x).abs();
-    final earThreshold = 30.0;
+    // Check head alignment
+    if (nose != null) {
+      final shoulderMidX = (leftShoulder.x + rightShoulder.x) / 2;
+      final headOffsetX = (nose.x - shoulderMidX).abs();
+      final headThreshold = 20.0;
 
-    // Determine if posture is good based on these checks
-    final isShoulderAligned = shoulderDiff < shoulderThreshold;
-    final isHipAligned = hipDiff < hipThreshold;
-    final isHeadAligned =
-        leftEarToShoulder < earThreshold && rightEarToShoulder < earThreshold;
-
-    _isGoodPosture = isShoulderAligned && isHipAligned && isHeadAligned;
-
-    // Provide feedback
-    if (_isGoodPosture) {
-      _postureFeedback = 'Good posture! Keep it up!';
-    } else {
-      if (!isShoulderAligned) {
-        _postureFeedback = 'Shoulders not level - try to balance them';
-        HapticFeedback.mediumImpact();
-      } else if (!isHipAligned) {
-        _postureFeedback = 'Hips not level - try to balance your weight';
-        HapticFeedback.mediumImpact();
-      } else if (!isHeadAligned) {
-        _postureFeedback = 'Head not aligned - try to keep your head centered';
-        HapticFeedback.mediumImpact();
-      } else {
-        _postureFeedback = 'Adjust your posture';
-        HapticFeedback.mediumImpact();
+      if (headOffsetX > headThreshold) {
+        feedbacks.add('Center your head');
+        totalSeverity += headOffsetX / headThreshold;
+        checksFailed++;
       }
     }
+
+    // Check if back is straight
+    if (leftShoulder != null && leftHip != null && rightShoulder != null && rightHip != null) {
+      // Calculate back angle
+      final backAngleLeft = _calculateAngle(
+        Point(leftShoulder.x, leftShoulder.y),
+        Point(leftHip.x, leftHip.y),
+        Point(leftHip.x, leftHip.y - 100), // Vertical reference
+      );
+
+      final backAngleRight = _calculateAngle(
+        Point(rightShoulder.x, rightShoulder.y),
+        Point(rightHip.x, rightHip.y),
+        Point(rightHip.x, rightHip.y - 100), // Vertical reference
+      );
+
+      final avgBackAngle = (backAngleLeft + backAngleRight) / 2;
+      final backThreshold = 10.0; // Degrees from vertical
+
+      if (avgBackAngle.abs() > backThreshold) {
+        feedbacks.add('Straighten your back');
+        totalSeverity += avgBackAngle.abs() / backThreshold;
+        checksFailed++;
+      }
+    }
+
+    // Determine overall posture quality
+    setState(() {
+      if (feedbacks.isEmpty) {
+        _isGoodPosture = true;
+        _postureFeedback = 'Good posture! Keep it up!';
+        _currentSeverity = ErrorSeverity.none;
+      } else {
+        _isGoodPosture = false;
+
+        // Calculate average severity
+        final avgSeverity = totalSeverity / checksFailed;
+
+        if (avgSeverity > 2.0) {
+          _currentSeverity = ErrorSeverity.major;
+          HapticFeedback.heavyImpact();
+        } else {
+          _currentSeverity = ErrorSeverity.minor;
+          HapticFeedback.mediumImpact();
+        }
+
+        _postureFeedback = feedbacks.join('\n');
+      }
+
+      _lastDeviation = checksFailed > 0 ? totalSeverity / checksFailed / 3.0 : 0.0;
+    });
+  }
+
+  // Calculate angle between three points in degrees
+  double _calculateAngle(Point p1, Point p2, Point p3) {
+    final angle1 = atan2(p1.y - p2.y, p1.x - p2.x);
+    final angle2 = atan2(p3.y - p2.y, p3.x - p2.x);
+
+    var angle = (angle2 - angle1) * (180 / pi);
+    if (angle < 0) angle += 360;
+    if (angle > 180) angle = 360 - angle;
+
+    return angle;
   }
 
   Widget _buildPerformanceOverlay() {
@@ -371,12 +457,6 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
               else
                 const Center(child: CircularProgressIndicator()),
 
-              // Pose overlay
-              if (_customPaint != null)
-                Positioned.fill(
-                  child: _customPaint!,
-                ),
-
               // Performance overlay
               _buildPerformanceOverlay(),
 
@@ -408,8 +488,8 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
                     color: _isGoodPosture
                         ? Colors.green.withOpacity(0.7)
                         : _currentSeverity == ErrorSeverity.major
-                            ? Colors.red.withOpacity(0.7)
-                            : Colors.orange.withOpacity(0.7),
+                        ? Colors.red.withOpacity(0.7)
+                        : Colors.orange.withOpacity(0.7),
                     padding: const EdgeInsets.symmetric(
                       vertical: 16,
                       horizontal: 24,
@@ -453,7 +533,7 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
+          const Icon(
             Icons.camera_alt_rounded,
             size: 80,
             color: Colors.grey,
@@ -481,13 +561,7 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     return Center(
       child: AspectRatio(
         aspectRatio: 1 / _cameraController!.value.aspectRatio,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            CameraPreview(_cameraController!),
-            if (_customPaint != null) _customPaint!,
-          ],
-        ),
+        child: CameraPreview(_cameraController!),
       ),
     );
   }
@@ -537,11 +611,11 @@ class PosePainter extends CustomPainter {
   final CameraLensDirection cameraLensDirection;
 
   PosePainter(
-    this.pose,
-    this.imageSize,
-    this.rotation,
-    this.cameraLensDirection,
-  );
+      this.pose,
+      this.imageSize,
+      this.rotation,
+      this.cameraLensDirection,
+      );
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -555,69 +629,96 @@ class PosePainter extends CustomPainter {
       ..strokeWidth = 4.0
       ..color = AppTheme.primaryColor;
 
+    // Define landmark connections for better visualization
+    final connections = [
+      [PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder],
+      [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow],
+      [PoseLandmarkType.leftElbow, PoseLandmarkType.leftWrist],
+      [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow],
+      [PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist],
+      [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip],
+      [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip],
+      [PoseLandmarkType.leftHip, PoseLandmarkType.rightHip],
+      [PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee],
+      [PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle],
+      [PoseLandmarkType.rightHip, PoseLandmarkType.rightKnee],
+      [PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle],
+      [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftEar],
+      [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightEar],
+      [PoseLandmarkType.leftEar, PoseLandmarkType.nose],
+      [PoseLandmarkType.rightEar, PoseLandmarkType.nose],
+    ];
+
+    // Draw connections between landmarks
+    for (final connection in connections) {
+      final start = pose.landmarks[connection[0]];
+      final end = pose.landmarks[connection[1]];
+
+      if (start != null && end != null) {
+        canvas.drawLine(
+          _translatePoint(Point(start.x, start.y), size),
+          _translatePoint(Point(end.x, end.y), size),
+          paint,
+        );
+      }
+    }
+
     // Draw all the landmarks
     pose.landmarks.forEach((type, landmark) {
+      // Use different colors for different body parts for better visibility
+      if (type == PoseLandmarkType.nose ||
+          type == PoseLandmarkType.leftEye ||
+          type == PoseLandmarkType.rightEye ||
+          type == PoseLandmarkType.leftEar ||
+          type == PoseLandmarkType.rightEar) {
+        dotPaint.color = Colors.red;
+      } else if (type == PoseLandmarkType.leftShoulder ||
+          type == PoseLandmarkType.rightShoulder ||
+          type == PoseLandmarkType.leftElbow ||
+          type == PoseLandmarkType.rightElbow ||
+          type == PoseLandmarkType.leftWrist ||
+          type == PoseLandmarkType.rightWrist) {
+        dotPaint.color = Colors.blue;
+      } else {
+        dotPaint.color = AppTheme.primaryColor;
+      }
+
+      // Draw landmark point
       canvas.drawCircle(
         _translatePoint(Point(landmark.x, landmark.y), size),
         8,
         dotPaint,
       );
     });
-
-    // Draw connections between landmarks
-    _drawLine(canvas, pose, PoseLandmarkType.leftShoulder,
-        PoseLandmarkType.rightShoulder, size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.leftShoulder,
-        PoseLandmarkType.leftElbow, size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.leftElbow,
-        PoseLandmarkType.leftWrist, size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.rightShoulder,
-        PoseLandmarkType.rightElbow, size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.rightElbow,
-        PoseLandmarkType.rightWrist, size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.leftShoulder,
-        PoseLandmarkType.leftHip, size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.rightShoulder,
-        PoseLandmarkType.rightHip, size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.leftHip, PoseLandmarkType.rightHip,
-        size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee,
-        size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.leftKnee,
-        PoseLandmarkType.leftAnkle, size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.rightHip,
-        PoseLandmarkType.rightKnee, size, paint);
-    _drawLine(canvas, pose, PoseLandmarkType.rightKnee,
-        PoseLandmarkType.rightAnkle, size, paint);
-  }
-
-  void _drawLine(Canvas canvas, Pose pose, PoseLandmarkType type1,
-      PoseLandmarkType type2, Size size, Paint paint) {
-    final landmark1 = pose.landmarks[type1];
-    final landmark2 = pose.landmarks[type2];
-
-    if (landmark1 != null && landmark2 != null) {
-      canvas.drawLine(
-        _translatePoint(Point(landmark1.x, landmark1.y), size),
-        _translatePoint(Point(landmark2.x, landmark2.y), size),
-        paint,
-      );
-    }
   }
 
   Offset _translatePoint(Point point, Size size) {
-    // Convert the point from the image coordinate system to the canvas coordinate system
-    // This is a simplified version - in a production app, you'd need to handle different rotations
-    final double x = point.x.toDouble();
-    final double y = point.y.toDouble();
+    // Handle scaling between image and canvas size
+    double x = point.x.toDouble();
+    double y = point.y.toDouble();
+
+    // Handle rotation
+    if (rotation == InputImageRotation.rotation90deg) {
+      final temp = x;
+      x = imageSize.height - y;
+      y = temp;
+    } else if (rotation == InputImageRotation.rotation270deg) {
+      final temp = x;
+      x = y;
+      y = imageSize.width - temp;
+    } else if (rotation == InputImageRotation.rotation180deg) {
+      x = imageSize.width - x;
+      y = imageSize.height - y;
+    }
 
     // Handle mirroring for front camera
-    final double translateX = cameraLensDirection == CameraLensDirection.front
-        ? size.width - (x / imageSize.width * size.width)
-        : x / imageSize.width * size.width;
+    if (cameraLensDirection == CameraLensDirection.front) {
+      x = imageSize.width - x;
+    }
 
+    // Scale to the canvas size
     return Offset(
-      translateX,
+      x / imageSize.width * size.width,
       y / imageSize.height * size.height,
     );
   }
