@@ -132,6 +132,11 @@ class _WorkoutListScreenState extends State<WorkoutListScreen> {
         title: const Text('Workouts'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.smart_toy),
+            onPressed: () => Navigator.of(context).pushNamed('/ai-workout'),
+            tooltip: 'AI Workout',
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadWorkouts,
           ),
