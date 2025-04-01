@@ -1,7 +1,7 @@
 import 'dart:convert';
-
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:fitflow/data/models/workout_model.dart';
+import 'package:fitflow/data/services/workout_prompt_builder.dart';
 
 class AIWorkoutService {
   final GenerativeModel _model;
@@ -16,13 +16,22 @@ class AIWorkoutService {
     required int availableMinutes,
     required String location,
     required String fitnessLevel,
+    List<String>? preferences,
   }) async {
     try {
-      final prompt = _buildWorkoutPrompt(
-        availableMinutes: availableMinutes,
-        location: location,
-        fitnessLevel: fitnessLevel,
-      );
+      final prompt = preferences != null
+          ? WorkoutPromptBuilder.buildWorkoutPromptWithPreferences(
+              availableMinutes: availableMinutes,
+              location: location,
+              fitnessLevel: fitnessLevel,
+              preferences: preferences,
+            )
+          : _buildWorkoutPrompt(
+              // Use the local method
+              availableMinutes: availableMinutes,
+              location: location,
+              fitnessLevel: fitnessLevel,
+            );
 
       final content = [Content.text(prompt)];
       final response = await _model.generateContent(content);

@@ -40,6 +40,7 @@ dependencies:
   # Health tracking
   health: ^12.1.0
   pedometer: ^4.0.1
+  sensors_plus: ^6.1.1
   
   # Utilities
   shared_preferences: ^2.2.2
