@@ -36,6 +36,12 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
   CustomPaint? _customPaint;
   String? _postureFeedback;
   bool _isGoodPosture = false;
+  int _frameCount = 0;
+  static const int _processEveryNFrames = 5; // Process every 5th frame
+  double _lastDeviation = 0.0;
+  ErrorSeverity _currentSeverity = ErrorSeverity.none;
+  double _fps = 0.0;
+  DateTime _lastProcessedTime = DateTime.now();
 
   @override
   void initState() {
@@ -93,8 +99,18 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
   }
 
   Future<void> _processCameraImage(CameraImage image) async {
+    _frameCount++;
+    if (_frameCount % _processEveryNFrames != 0)
+      return; // Skip frames for performance
+
     if (_isBusy) return;
     _isBusy = true;
+
+    // Calculate FPS
+    final now = DateTime.now();
+    final duration = now.difference(_lastProcessedTime);
+    _fps = 1000 / duration.inMilliseconds * _processEveryNFrames;
+    _lastProcessedTime = now;
 
     final inputImage = _convertCameraImageToInputImage(image);
     if (inputImage == null) {
@@ -116,6 +132,13 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
 
       // Analyze posture and provide feedback
       _analyzePosture(poses.first);
+
+      // Update UI with performance metrics
+      if (mounted) {
+        setState(() {
+          _customPaint = CustomPaint(painter: painter);
+        });
+      }
     } else {
       _customPaint = null;
       _postureFeedback = 'No pose detected';
@@ -212,15 +235,20 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     final analysis = PoseAnalysisService.analyzePose(pose, _currentTemplate!);
 
     _isGoodPosture = analysis.isCorrectPose;
+    _lastDeviation = analysis.maxDeviation;
+    _currentSeverity = analysis.severity;
 
     if (_isGoodPosture) {
       _postureFeedback = 'Good form! Keep it up!';
     } else {
-      // Join all feedback messages with proper formatting
       _postureFeedback = analysis.feedbackMessages.join('\n');
 
-      // Provide haptic feedback for incorrect posture
-      HapticFeedback.mediumImpact();
+      // Provide haptic feedback based on error severity
+      if (_currentSeverity == ErrorSeverity.major) {
+        HapticFeedback.heavyImpact();
+      } else if (_currentSeverity == ErrorSeverity.minor) {
+        HapticFeedback.mediumImpact();
+      }
     }
   }
 
@@ -286,6 +314,35 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
     }
   }
 
+  Widget _buildPerformanceOverlay() {
+    return Positioned(
+      top: 60,
+      right: 10,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              'FPS: ${_fps.toStringAsFixed(1)}',
+              style: const TextStyle(color: Colors.white),
+            ),
+            Text(
+              'Deviation: ${(_lastDeviation * 100).toStringAsFixed(1)}%',
+              style: TextStyle(
+                color: _isGoodPosture ? Colors.green : Colors.red,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -314,6 +371,33 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
               else
                 const Center(child: CircularProgressIndicator()),
 
+              // Pose overlay
+              if (_customPaint != null)
+                Positioned.fill(
+                  child: _customPaint!,
+                ),
+
+              // Performance overlay
+              _buildPerformanceOverlay(),
+
+              // Exercise template info
+              if (_currentTemplate != null)
+                Positioned(
+                  top: 120,
+                  left: 10,
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'Exercise: ${_currentTemplate!.exerciseName}',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ),
+
               // Posture feedback overlay
               if (_postureFeedback != null)
                 Positioned(
@@ -323,16 +407,37 @@ class _PostureDetectionScreenState extends State<PostureDetectionScreen> {
                   child: Container(
                     color: _isGoodPosture
                         ? Colors.green.withOpacity(0.7)
-                        : Colors.red.withOpacity(0.7),
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      _postureFeedback!,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      textAlign: TextAlign.center,
+                        : _currentSeverity == ErrorSeverity.major
+                            ? Colors.red.withOpacity(0.7)
+                            : Colors.orange.withOpacity(0.7),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 16,
+                      horizontal: 24,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _postureFeedback!,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        if (!_isGoodPosture)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: Text(
+                              'Adjust your form to continue',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),

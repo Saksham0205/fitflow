@@ -5,11 +5,17 @@ import '../models/pose_template.dart';
 
 class PoseAnalysisService {
   static const double _confidenceThreshold = 0.5;
+  static const double _minorErrorThreshold =
+      0.15; // 15% deviation for minor errors
+  static const double _majorErrorThreshold =
+      0.25; // 25% deviation for major errors
 
-  /// Analyzes a pose against a template and returns feedback
+  /// Analyzes a pose against a template and returns feedback with error severity
   static PoseAnalysisResult analyzePose(Pose pose, PoseTemplate template) {
     final List<String> feedbackMessages = [];
     bool isCorrectPose = true;
+    double maxDeviation = 0.0;
+    ErrorSeverity severity = ErrorSeverity.none;
 
     // Check angle constraints
     for (final constraint in template.angleConstraints) {
@@ -19,10 +25,22 @@ class PoseAnalysisService {
         pose.landmarks[constraint.joint3]!,
       );
 
-      if (angle < constraint.minAngle || angle > constraint.maxAngle) {
-        feedbackMessages
-            .add(template.feedbackMessages[constraint.feedbackKey] ?? '');
+      final targetAngle = (constraint.minAngle + constraint.maxAngle) / 2;
+      final allowedDeviation = (constraint.maxAngle - constraint.minAngle) / 2;
+      final currentDeviation = (angle - targetAngle).abs() / allowedDeviation;
+
+      maxDeviation = max(maxDeviation, currentDeviation);
+
+      if (currentDeviation > _minorErrorThreshold) {
+        final message = template.feedbackMessages[constraint.feedbackKey] ?? '';
+        feedbackMessages.add(message);
         isCorrectPose = false;
+
+        if (currentDeviation > _majorErrorThreshold) {
+          severity = ErrorSeverity.major;
+        } else if (severity != ErrorSeverity.major) {
+          severity = ErrorSeverity.minor;
+        }
       }
     }
 
@@ -34,16 +52,27 @@ class PoseAnalysisService {
         constraint.axis,
       );
 
-      if (deviation > constraint.maxDeviation) {
-        feedbackMessages
-            .add(template.feedbackMessages[constraint.feedbackKey] ?? '');
+      final currentDeviation = deviation / constraint.maxDeviation;
+      maxDeviation = max(maxDeviation, currentDeviation);
+
+      if (currentDeviation > _minorErrorThreshold) {
+        final message = template.feedbackMessages[constraint.feedbackKey] ?? '';
+        feedbackMessages.add(message);
         isCorrectPose = false;
+
+        if (currentDeviation > _majorErrorThreshold) {
+          severity = ErrorSeverity.major;
+        } else if (severity != ErrorSeverity.major) {
+          severity = ErrorSeverity.minor;
+        }
       }
     }
 
     return PoseAnalysisResult(
       isCorrectPose: isCorrectPose,
       feedbackMessages: feedbackMessages,
+      severity: severity,
+      maxDeviation: maxDeviation,
     );
   }
 
@@ -156,12 +185,22 @@ class PoseAnalysisService {
   }
 }
 
+enum ErrorSeverity {
+  none,
+  minor,
+  major,
+}
+
 class PoseAnalysisResult {
   final bool isCorrectPose;
   final List<String> feedbackMessages;
+  final ErrorSeverity severity;
+  final double maxDeviation;
 
   PoseAnalysisResult({
     required this.isCorrectPose,
     required this.feedbackMessages,
+    this.severity = ErrorSeverity.none,
+    this.maxDeviation = 0.0,
   });
 }
