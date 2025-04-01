@@ -1,16 +1,13 @@
 import 'dart:convert';
-
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:http/http.dart' as http;
 import 'package:fitflow/data/models/workout_model.dart';
 
-class AIWorkoutService {
-  final GenerativeModel _model;
+class AIWorkoutServiceHF {
+  final String _apiKey;
+  final String _modelEndpoint =
+      'https://api-inference.huggingface.co/models/gpt2';
 
-  AIWorkoutService(String apiKey)
-      : _model = GenerativeModel(
-          model: 'gemini-pro',
-          apiKey: apiKey,
-        );
+  AIWorkoutServiceHF(this._apiKey);
 
   Future<WorkoutModel> generateWorkout({
     required int availableMinutes,
@@ -24,9 +21,27 @@ class AIWorkoutService {
         fitnessLevel: fitnessLevel,
       );
 
-      final content = [Content.text(prompt)];
-      final response = await _model.generateContent(content);
-      final workoutData = _parseAIResponse(response.text ?? '');
+      final response = await http.post(
+        Uri.parse(_modelEndpoint),
+        headers: {
+          'Authorization': 'Bearer $_apiKey',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'inputs': prompt,
+          'parameters': {
+            'max_length': 1000,
+            'temperature': 0.7,
+            'top_p': 0.9,
+          },
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to generate workout: ${response.body}');
+      }
+
+      final workoutData = _parseAIResponse(response.body);
 
       return WorkoutModel(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -80,12 +95,15 @@ class AIWorkoutService {
   }
 
   Map<String, dynamic> _parseAIResponse(String response) {
+    final List<dynamic> generated = jsonDecode(response);
+    final jsonStr = generated[0]['generated_text'];
+
     // Extract JSON from the response
-    final jsonStr = response.substring(
-      response.indexOf('{'),
-      response.lastIndexOf('}') + 1,
-    );
-    return Map<String, dynamic>.from(jsonDecode(jsonStr));
+    final startIndex = jsonStr.indexOf('{');
+    final endIndex = jsonStr.lastIndexOf('}') + 1;
+    final jsonContent = jsonStr.substring(startIndex, endIndex);
+
+    return Map<String, dynamic>.from(jsonDecode(jsonContent));
   }
 
   WorkoutType _getWorkoutType(String location) {

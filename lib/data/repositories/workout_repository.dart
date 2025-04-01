@@ -2,15 +2,39 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fitflow/data/models/workout_model.dart';
 import 'package:fitflow/data/models/tracking_model.dart';
 import 'package:fitflow/data/services/workout_recommendation_service.dart';
+import 'package:fitflow/data/services/ai_workout_service_factory.dart';
+import 'package:flutter/foundation.dart';
 
 class WorkoutRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final WorkoutRecommendationService _recommendationService =
       WorkoutRecommendationService();
+  final dynamic _aiService;
+
+  WorkoutRepository(String aiApiKey)
+      : _aiService = AIWorkoutServiceFactory.createService(
+            AIServiceType.huggingface, aiApiKey);
 
   // Get recommended workouts for user
   Future<List<WorkoutModel>> getRecommendedWorkouts(String userId) {
     return _recommendationService.getRecommendedWorkouts(userId);
+  }
+
+  Future<WorkoutModel> generateAIWorkout({
+    required int availableMinutes,
+    required String location,
+    required String fitnessLevel,
+  }) async {
+    try {
+      return await _aiService.generateWorkout(
+        availableMinutes: availableMinutes,
+        location: location,
+        fitnessLevel: fitnessLevel,
+      );
+    } catch (e) {
+      debugPrint('Error generating AI workout: $e');
+      throw Exception('Failed to generate workout');
+    }
   }
 
   // Get all available workouts
