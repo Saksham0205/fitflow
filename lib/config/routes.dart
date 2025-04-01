@@ -10,6 +10,7 @@ import 'package:fitflow/features/posture/screens/posture_detection_screen.dart';
 import 'package:fitflow/features/tracking/screens/tracking_dashboard_screen.dart';
 import 'package:fitflow/features/social/screens/challenges_screen.dart';
 import 'package:fitflow/features/premium/screens/subscription_screen.dart';
+import 'package:fitflow/features/workouts/screens/ai_workout_screen.dart';
 
 class AppRouter {
   static Route<dynamic> onGenerateRoute(RouteSettings settings) {
@@ -41,6 +42,8 @@ class AppRouter {
         return MaterialPageRoute(builder: (_) => const ChallengesScreen());
       case '/subscription':
         return MaterialPageRoute(builder: (_) => const SubscriptionScreen());
+      case '/ai-workout':
+        return MaterialPageRoute(builder: (_) => const AIWorkoutScreen());
       default:
         return MaterialPageRoute(
           builder: (_) => Scaffold(
