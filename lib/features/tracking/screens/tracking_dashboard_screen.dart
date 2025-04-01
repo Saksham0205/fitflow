@@ -336,6 +336,19 @@ class _TrackingDashboardScreenState extends State<TrackingDashboardScreen> {
             ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: 0,
+        onTap: (index) {
+          switch (index) {
+            case 0:
+              // Already on dashboard
+              break;
+            case 1:
+              Navigator.of(context).pushNamed('/workouts');
+              break;
+            case 2:
+              Navigator.of(context).pushNamed('/profile');
+              break;
+          }
+        },
         items: const [
           BottomNavigationBarItem(
             icon: Icon(Icons.dashboard),
@@ -350,13 +363,6 @@ class _TrackingDashboardScreenState extends State<TrackingDashboardScreen> {
             label: 'Profile',
           ),
         ],
-        onTap: (index) {
-          if (index == 1) {
-            Navigator.of(context).pushNamed('/workouts');
-          } else if (index == 2) {
-            Navigator.of(context).pushNamed('/profile');
-          }
-        },
       ),
     );
   }
